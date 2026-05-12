@@ -115,7 +115,9 @@ Total: 10 probe attachments. Well under bpftrace's 1024-program default. All `.c
 - `--json` — JSON Lines output
 - `--firebird-prefix <path>` — override default `/opt/firebird-v5`
 
-**Success criterion:** running `tests/workloads/slowquery-basic.sql` produces an event line per statement (covering both the `DSQL_execute` path via a DML/EXECUTE PROCEDURE statement and the `openCursor`+`fetchNext` path via a multi-row SELECT), with durations matching `isql` `SET STATS ON` wall-clock within 10%.
+**Success criterion:** running `tests/workloads/slowquery-basic.sql` produces one event per executed statement, covering both the `DSQL_execute` path (singleton SELECTs, DML, set-transaction) and the `openCursor`+`fetchNext` path (multi-row SELECTs). Durations are positive and reflect *engine-side* time only — `prepare_ns` is wall-clock inside `DSQL_prepare`, `execute_ns` is wall-clock inside `DSQL_execute` / `DSQL_execute_immediate` / from `openCursor` entry to EOF `fetchNext` return. `isql`'s `SET STATS ON` "Elapsed time" additionally includes TCP round-trip and result formatting, so isql elapsed exceeds tragach `prepare_ns + execute_ns` by a roughly per-statement constant on localhost (typically a few hundred µs); they are not directly comparable.
+
+Where precise validation matters, Firebird's Trace API (`fbtracemgr` against `event_dsql_prepare` / `event_dsql_execute`) is the apples-to-apples reference — it probes the same boundaries as tragach. For statements whose engine-side execute time exceeds 10 ms, tragach `execute_ns` should match the Trace API's `req_fetch_elapsed` within 10%; below that threshold relative noise from probe overhead dominates.
 
 ### 5.2 `tragach-iowait`
 
