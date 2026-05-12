@@ -84,12 +84,24 @@ Aya's `UProbe::attach(fn_name, offset, target, pid)` resolves `fn_name` against 
 
 ## iowait probe targets (SPECS §5.2)
 
-No Firebird symbols. Two kernel tracepoints:
+No Firebird symbols. Two kernel tracepoints; field offsets validated against `/sys/kernel/debug/tracing/events/sched/sched_switch/format` and `…/sched_wakeup/format`:
 
-- `sched:sched_switch` — fires when a thread is descheduled. Filter to threads whose `prev_pid` belongs to the Firebird process; record the off-CPU start timestamp keyed by `prev_pid`.
-- `sched:sched_wakeup` — fires when a thread becomes runnable. Look up the start timestamp, compute the delta, attribute it to a bucket keyed by the kernel stack captured at `sched_switch` time.
+- `sched:sched_switch` — `prev_pid` at offset 24 (i32), `prev_state` at offset 32 (i64). Filter on `(prev_state as u8) != 0` (task is sleeping, not just preempted) AND `bpf_get_current_pid_tgid() >> 32 == TARGET_TGID[0]` (current at this hook is the outgoing task, so its tgid is prev's tgid).
+- `sched:sched_wakeup` — `pid` at offset 24 (i32). Look up `START[pid]`; if present, compute delta, accumulate to `BUCKETS[(pid, stack_id)]`. Absent entries are wake-ups for untracked tasks and are ignored — no tgid filter needed in this handler.
 
-Bucket classification (Other / BlockIo / Futex / SchedDelay) happens at flush time in userspace, by matching kernel-stack symbols against a small known-token set. This keeps the BPF side simple and dependent only on `bpf_get_stackid` + ring-buffer emission.
+Bucket classification (Other / BlockIo / Futex / SchedDelay) happens at flush time in userspace, matching kernel-stack symbols against a small known-token set. The BPF side stays simple: stack capture via `bpf_get_stackid` + accumulation into a single HashMap, all eviction-bounded.
+
+The leaf frame in nearly every sleeping stack is `__schedule` followed by `schedule`. Userspace skips both when picking the "top" representative frame so the display surfaces the 3rd-or-deeper meaningful frame (e.g. `futex_wait_queue`, `io_schedule`, `schedule_hrtimeout_range_clock`).
+
+## SuperServer worker-pool finding (commit 2539c77, SPECS §5.2 amendment)
+
+During iowait validation, the original SPECS §5.2 success criterion ("block I/O dominates during the scan") proved unachievable on SuperServer for architectural reasons:
+
+- SuperServer keeps a worker-thread pool plus a connection-accept thread. Idle workers sleep in `futex_wait`; the accept thread sleeps in `poll()` (scheduler delay).
+- Both bucket sources accumulate `N_threads × window × idle_fraction` of off-CPU time regardless of whether any query is running.
+- Validation: a 2 GB cold scan (BLOB-touching, `Reads = 252539` per isql `SET STATS ON`) generated ~1.3 s of `block I/O wait` against ~26 s of `futex wait` and ~3 s of `scheduler delay` in the same 15 s window. The block-I/O bucket grew ~2.7× when the workload switched from a COUNT(*) that doesn't read BLOB pages (~500 ms of I/O) to a SUBSTRING(...) scan that does (~1.3 s) — *proportional response* is the correct signal.
+
+Implication for v0.1: tragach-iowait correctly attributes off-CPU time and shows proportional response to disk activity. "Dominance" would require distinguishing "thread sleeping waiting for work" from "thread sleeping waiting for I/O or a lock" — listed in FUTURE.md as a v0.2 active-thread-filtering feature.
 
 ## License hygiene
 
