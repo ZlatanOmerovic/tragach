@@ -33,10 +33,23 @@ Outline: stable Rust for userspace, nightly + `rust-src` + `bpf-linker` for the 
 
 > TODO — example output for each script.
 
+## Overhead
+
+Measured on Debian 13 trixie (kernel 6.12), Firebird v5.0.4 SuperServer, against the bundled `employee.fdb`. Benchmark: 10 000 singleton SELECT statements via `isql`, mean of 5 runs each.
+
+| | Baseline | Instrumented | Overhead |
+|---|---|---|---|
+| `tragach-slowquery` (10 000 stmt/3 s burst) | 309 µs/stmt | 340 µs/stmt | +31 µs/stmt (10.0% wall-clock) |
+| `tragach-iowait` (same Firebird workload) | 3.11 s total | 3.13 s total | ≈ 0.6% wall-clock |
+| `tragach-iowait` (non-Firebird, context-switch-heavy) | 12.38 s | 12.66 s | ≈ 2.3% wall-clock |
+
+Methodology and per-probe breakdowns are in each script's source-file header (`crates/tragach-*/src/bpf/main.rs`). On a typical workload tragach-slowquery costs ~15 µs per uprobe/uretprobe pair (≈ two pairs per `DSQL_prepare` + `DSQL_execute` cycle). tragach-iowait's per-context-switch cost is below the test's ~1 µs jitter floor; the workload-level deltas above are the authoritative envelope.
+
 ## Known limitations
 
 - Firebird v5 SuperServer only (Classic/SuperClassic, v3/v4/v6 deferred — see FUTURE.md).
 - Linux only (eBPF is Linux-only by design).
+- `tragach-slowquery` does not probe `DSQL_free_statement`, so the prepared-statement map is LRU-bounded at 1024 entries; an event for an evicted statement reports `prepare_ns=0`. Cursor SELECTs closed before EOF are not emitted (FUTURE.md).
 
 ## License
 

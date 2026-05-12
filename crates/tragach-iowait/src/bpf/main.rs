@@ -18,6 +18,16 @@
 //! Userspace drains BUCKETS each flush interval, resolves stack_ids via
 //! STACKS map → kernel symbols → bucket classification. Field offsets came
 //! from `/sys/kernel/debug/tracing/events/sched/{sched_switch,sched_wakeup}/format`.
+//!
+//! Measured overhead (Debian 13 trixie / kernel 6.12, Firebird v5.0.4):
+//!   - 10k singleton SELECTs against employee.fdb: 3.11s baseline vs 3.13s
+//!     with iowait attached → ≈ 0.6% wall-clock overhead on a Firebird-only
+//!     workload. The tgid filter short-circuits cheaply for non-target tasks.
+//!   - Context-switch-heavy non-Firebird workload (5 000 shell pipelines):
+//!     ≈ 2.3% wall-clock overhead — the cost of the tracepoint firing
+//!     globally and our handler reaching the early-exit filter.
+//! Per-event handler cost is below the ~1 µs jitter floor of the tests above;
+//! treat the workload-level numbers as the authoritative envelope.
 
 #![no_std]
 #![no_main]
