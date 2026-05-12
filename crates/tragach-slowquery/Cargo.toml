@@ -23,6 +23,7 @@ serde_json.workspace = true
 chrono.workspace = true
 humantime.workspace = true
 nix.workspace = true
+object.workspace = true
 
 [build-dependencies]
 aya-build.workspace = true
