@@ -35,6 +35,23 @@ The original SPECS §5.2 success criterion ("block I/O dominates during scans") 
 
 **Plan:** add a v0.2 flag (`--active-threads` or `--exclude-idle`) that suppresses any (pid, stack_id) bucket whose accumulated off-CPU time exceeds some fraction of the window (suggesting the thread spent the whole window in that one wait — a near-certain idle marker). Alternatively / additionally, emit per-thread bucket breakdowns so the scan thread's profile is visible independently of the worker pool's idle profile. Document the heuristic alongside the flag.
 
+## v0.2+ — slowquery parameter values
+
+Currently `tragach-slowquery` captures the SQL template that `DSQL_prepare` receives — for parameterized statements that means the literal `?` placeholders, not the bound values. The values arrive separately at `DSQL_execute` time through two arguments we ignore today: `IMessageMetadata* in_meta` (RCX, arg 3) and `const UCHAR* in_msg` (R8, arg 4). The metadata describes parameter count, types, offsets, and null bitmap; the message is the binary-packed value buffer.
+
+This is intentionally deferred. Reasons:
+- `IMessageMetadata` is a Firebird OO virtual interface (`getCount`, `getType`, `getOffset`, `getLength`, `getNullable`, `getScale`, …). BPF programs cannot make virtual calls, so we can't introspect it from kernel-side.
+- The struct backing the interface is not part of any stable ABI. Per CLAUDE.md license hygiene we'd have to re-derive field offsets per Firebird version with `pahole`, no copying. Maintenance burden grows per supported version.
+- Type-specific decoding (TIMESTAMP, NUMERIC with scale, VARCHAR length-prefix, BLOB IDs that reference separate pages, CHARSET-aware text) is non-trivial and partly requires database-side lookups.
+
+**Plan (sketch, when promoted):**
+1. BPF side captures the raw `in_msg` bytes (up to a fixed cap, e.g. 1 KiB) and the `IMessageMetadata*` pointer; ringbuf-emits both alongside the existing event.
+2. Userspace maintains a per-`DsqlRequest*` metadata cache populated by reconnecting to Firebird as SYSDBA and calling `isc_dsql_describe_bind` (or the modern OO equivalent) to learn the parameter shape. This avoids any struct-offset assumptions.
+3. Userspace decodes the binary buffer using the cached metadata and renders values per type.
+4. Output adds a `params` array to the JSON schema and a `params=[…]` suffix to the human display, gated behind a `--with-params` flag (off by default — privacy concern, since values often contain PII / secrets).
+
+**Open question for promotion:** the privacy default. Some shops will want values; others can't have them in logs. v0.x ships off-by-default; v1.x may reverse if reasonable redaction is in place.
+
 ## v0.2+ — quality-of-life
 
 - **Single `tragach` binary with subcommands.** `tragach slowquery`, `tragach iowait`, etc. Shared CLI parsing, shared output formatting, shared `--firebird-prefix` resolution. Worth doing once there are ≥3 scripts.
