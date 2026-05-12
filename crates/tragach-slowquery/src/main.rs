@@ -222,13 +222,17 @@ async fn run_event_loop(ring: RingBuf<MapData>, args: &Args) -> Result<()> {
                             if let Some(t) = threshold_ns {
                                 if ev.execute_ns < t { continue; }
                             }
-                            let small_id = match id_table.get(&ev.attachment_id) {
-                                Some(id) => *id,
-                                None => {
+                            // attachment_ptr == 0 means we saw the execute but
+                            // not the prepare (probe started mid-flight, or
+                            // LRU eviction). Surface as "unknown" rather than
+                            // shoehorning into the small-ID table.
+                            let small_id: Option<u32> = if ev.attachment_id == 0 {
+                                None
+                            } else {
+                                Some(*id_table.entry(ev.attachment_id).or_insert_with(|| {
                                     next_id = next_id.wrapping_add(1);
-                                    id_table.insert(ev.attachment_id, next_id);
                                     next_id
-                                }
+                                }))
                             };
                             if args.json {
                                 write_json(&mut stdout, &ev, small_id)?;
@@ -271,18 +275,27 @@ fn sql_str(ev: &SlowQueryEvent) -> std::borrow::Cow<'_, str> {
     String::from_utf8_lossy(&trimmed[..end])
 }
 
-fn write_human<W: std::io::Write>(w: &mut W, ev: &SlowQueryEvent, att: u32) -> Result<()> {
+fn write_human<W: std::io::Write>(w: &mut W, ev: &SlowQueryEvent, att: Option<u32>) -> Result<()> {
     let ts: DateTime<Utc> = chrono::Utc::now();
     let sql = sql_str(ev);
+    let sql_display: &str = if sql.is_empty() && ev.attachment_id == 0 {
+        "<sql unknown — execute without tracked prepare>"
+    } else {
+        &sql
+    };
     let truncated = if ev.sql_truncated != 0 { "..." } else { "" };
+    let att_display = match att {
+        Some(id) => format!("{:<4}", id),
+        None => "?   ".to_string(),
+    };
     writeln!(
         w,
-        "{}  att={:<4} prepare={:>9}  execute={:>9}  {}{}",
+        "{}  att={} prepare={:>9}  execute={:>9}  {}{}",
         ts.format("%Y-%m-%dT%H:%M:%S%.3fZ"),
-        att,
+        att_display,
         fmt_duration(ev.prepare_ns),
         fmt_duration(ev.execute_ns),
-        sql,
+        sql_display,
         truncated,
     )?;
     Ok(())
@@ -291,26 +304,40 @@ fn write_human<W: std::io::Write>(w: &mut W, ev: &SlowQueryEvent, att: u32) -> R
 #[derive(Serialize)]
 struct JsonEvent<'a> {
     ts: String,
-    att: u32,
-    att_ptr: String,
+    /// Sequential per-run small ID assigned by userspace. `null` when the
+    /// attachment pointer wasn't captured (execute without tracked prepare).
+    att: Option<u32>,
+    /// Raw Attachment* pointer as hex. `null` when unknown.
+    att_ptr: Option<String>,
     tid: u32,
     prepare_us: u64,
     execute_us: u64,
-    sql: &'a str,
+    /// SQL text, up to 512 bytes. `null` when not captured.
+    sql: Option<&'a str>,
     truncated: bool,
 }
 
-fn write_json<W: std::io::Write>(w: &mut W, ev: &SlowQueryEvent, att: u32) -> Result<()> {
+fn write_json<W: std::io::Write>(w: &mut W, ev: &SlowQueryEvent, att: Option<u32>) -> Result<()> {
     let ts: DateTime<Utc> = chrono::Utc::now();
     let sql = sql_str(ev);
+    let sql_opt: Option<&str> = if sql.is_empty() && ev.attachment_id == 0 {
+        None
+    } else {
+        Some(&sql)
+    };
+    let att_ptr = if ev.attachment_id == 0 {
+        None
+    } else {
+        Some(format!("0x{:x}", ev.attachment_id))
+    };
     let json = JsonEvent {
         ts: ts.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         att,
-        att_ptr: format!("0x{:x}", ev.attachment_id),
+        att_ptr,
         tid: ev.tid,
         prepare_us: ev.prepare_ns / 1_000,
         execute_us: ev.execute_ns / 1_000,
-        sql: &sql,
+        sql: sql_opt,
         truncated: ev.sql_truncated != 0,
     };
     serde_json::to_writer(&mut *w, &json)?;

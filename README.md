@@ -79,11 +79,27 @@ Example output (human-readable) — running the workload in `tests/workloads/slo
 
 `att=N` is a sequential per-run small ID; the JSON output also emits `att_ptr` (the raw Attachment pointer in hex) for cross-run identity. `prepare=0ns` flags a `DSQL_execute_immediate` call (no separable prepare phase) or a prepared statement that was LRU-evicted before this execute.
 
-`--json` emits one JSON object per event:
+`--json` emits one JSON object per line. Schema:
+
+| Field | Type | Notes |
+|---|---|---|
+| `ts` | string (RFC 3339, ms precision, UTC) | Event observation time in userspace |
+| `att` | integer or `null` | Sequential per-run small ID; `null` when the attachment was not captured (execute without tracked prepare) |
+| `att_ptr` | string (hex, e.g. `"0x7f8c1d04a000"`) or `null` | Raw `Attachment*` pointer; stable for the attachment's lifetime; `null` when unknown |
+| `tid` | integer | Linux thread ID that issued the statement (server-side worker) |
+| `prepare_us` | integer | `DSQL_prepare` duration in microseconds; `0` for `DSQL_execute_immediate`, LRU-evicted prepares, or untracked prepares |
+| `execute_us` | integer | `DSQL_execute` / `DSQL_execute_immediate` / `openCursor`→EOF duration in microseconds |
+| `sql` | string or `null` | SQL text up to 512 bytes; `null` when not captured |
+| `truncated` | boolean | `true` when the SQL text exceeded 512 bytes and was truncated |
+
+Example:
 
 ```json
 {"ts":"2026-05-12T22:24:36.567Z","att":3,"att_ptr":"0x7f8c1d04a000","tid":740,"prepare_us":826,"execute_us":41,"sql":"SELECT FIRST_NAME, LAST_NAME FROM EMPLOYEE WHERE EMP_NO = 2","truncated":false}
+{"ts":"2026-05-12T22:24:36.572Z","att":null,"att_ptr":null,"tid":740,"prepare_us":0,"execute_us":67,"sql":null,"truncated":false}
 ```
+
+The second line shows the "execute without tracked prepare" case — tragach saw the execute but never saw the prepare (probably prepared before tragach attached, or LRU-evicted from the 1024-entry prepared-statement map).
 
 ### `tragach-iowait`
 
@@ -108,7 +124,19 @@ Off-CPU time by reason:
 
 Bucket classification is by stack-frame substring: block I/O matches `blk_*` / `bio_*` / `submit_bio*` / `io_schedule*` / `wait_on_buffer`; futex matches `futex_*` / `do_futex` / `__futex*`; scheduler delay catches anything rooted at `schedule` that isn't one of the above; everything else falls into `other`.
 
-`--json` emits one JSON object per flush window with per-bucket totals and the top-N stacks.
+`--json` emits one JSON object per flush window. Schema:
+
+| Field | Type | Notes |
+|---|---|---|
+| `ts` | string (RFC 3339, UTC) | Window emission time |
+| `window_ms` | integer | Flush interval in milliseconds (mirrors `--interval`) |
+| `pid` | integer | Target Firebird PID |
+| `by_reason` | object | Keyed by reason label (`"block I/O wait"`, `"futex wait"`, `"scheduler delay"`, `"other"`); empty keys absent |
+| `by_reason.<label>.total_ms` | integer | Total off-CPU milliseconds in this bucket this window |
+| `by_reason.<label>.threads` | integer | Distinct thread IDs contributing to this bucket |
+| `by_reason.<label>.top_stacks` | array | Up to `--top-stacks` entries, sorted by `ms` descending |
+| `by_reason.<label>.top_stacks[].ms` | integer | Off-CPU milliseconds attributed to this exact stack |
+| `by_reason.<label>.top_stacks[].frames` | array of strings | Kernel frames leaf-first (e.g. `["__schedule","schedule","io_schedule",…]`) |
 
 ## Overhead
 
