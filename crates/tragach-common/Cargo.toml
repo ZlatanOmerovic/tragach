@@ -1,0 +1,15 @@
+[package]
+name = "tragach-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared event types for tragach userspace and BPF programs."
+
+[features]
+default = []
+# Userspace consumers enable "std" to opt in to serde derives. BPF crates
+# must leave it off so the crate stays no_std.
+std = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true, features = ["derive"] }

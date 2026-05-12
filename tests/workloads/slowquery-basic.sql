@@ -1,0 +1,8 @@
+-- Workload for tragach-slowquery (SPECS.md §5.1).
+--
+-- Goal: exercise both DSQL_prepare and DSQL_execute paths with a mix of
+-- short and slow statements, so slowquery emits one event per statement
+-- with durations matching `isql -t` wall-clock within 10%.
+--
+-- Real workload lands alongside the slowquery implementation pass.
+-- TODO: connect, define schema, populate, run fast/slow mix, disconnect.

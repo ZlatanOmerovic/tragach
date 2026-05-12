@@ -1,0 +1,6 @@
+[toolchain]
+channel = "nightly"
+components = ["rust-src", "rustfmt"]
+# bpfel-unknown-none has no precompiled std; we build it via
+# `-Z build-std=core`. Listing it under `targets` would cause rustup to fail
+# to install rust-std for it.

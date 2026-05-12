@@ -1,0 +1,8 @@
+-- Workload for tragach-iowait (SPECS.md §5.2).
+--
+-- Goal: produce a regime where block-I/O-wait dominates (large table scan
+-- on cold cache), then a regime where futex-wait dominates (two concurrent
+-- attachments contending on UPDATE of the same row).
+--
+-- Real workload lands alongside the iowait implementation pass.
+-- TODO: schema, bulk insert, scan, contended UPDATE pair.

@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tragach-common",
+    "crates/tragach-slowquery",
+    "crates/tragach-iowait",
+    "xtask",
+]
+# BPF sub-crates use a different target (bpfel-unknown-none) and nightly
+# toolchain (-Z build-std=core). They are intentionally excluded from this
+# workspace and driven by each userspace crate's build.rs. See SPECS.md §3.
+exclude = [
+    "crates/tragach-slowquery/src/bpf",
+    "crates/tragach-iowait/src/bpf",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/zlome/tragach"
+rust-version = "1.80"
+
+[workspace.dependencies]
+tragach-common = { path = "crates/tragach-common" }
+
+# Aya stack — pinned exact per SPECS.md §3 (do not track main).
+aya = "=0.13.1"
+aya-log = "=0.2.1"
+aya-build = "=0.1.3"
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
+env_logger = "0.11"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+humantime = "2"
+nix = { version = "0.29", features = ["process", "user", "signal"] }
+
+[workspace.metadata.tragach]
+# Firebird target pin — must match symbols/<tag>-libEngine13.txt. See SPECS.md §3.
+firebird-tag = "v5.0.4"
+firebird-build = "LI-V5.0.4.1812"
+firebird-prefix = "/opt/firebird-v5"
+aya-version = "0.13.1"
+aya-ebpf-version = "0.1.1"
+bpf-linker-version = "0.10.3"
