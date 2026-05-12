@@ -76,15 +76,29 @@ These two are chosen because together they demonstrate the project's full value 
 
 **Question answered:** *Which DSQL statements ran, how long did each take, against which attachment, and with what SQL text?*
 
-**Hook points:**
-- Probe pattern: substring `*DSQL_prepare*` and `*DSQL_execute*` against `/opt/firebird-v5/plugins/libEngine13.so`
-- Expected probe count: ~2 per pattern (verify against `symbols/`)
-- Justification: these are the documented entry points for DSQL handling and correspond to Trace API event boundaries (`event_dsql_prepare`, `event_dsql_execute`). Stable across Firebird point releases as a result.
+**Hook points (all in `libEngine13.so`):**
+
+| Function | Role | Probe pair | Substring pattern | Expected count |
+|---|---|---|---|---|
+| `DSQL_prepare` | Statement preparation timing + SQL text capture | uprobe + uretprobe | `*DSQL_prepare*` | 2 (1 primary + 1 `.cold`) |
+| `DSQL_execute` | Non-cursor execute path (DML, singleton SELECT, SET TRANSACTION) | uprobe + uretprobe | `*DSQL_execute*` substring | 2 |
+| `DSQL_execute_immediate` | One-shot prepare+execute (also caught by `*DSQL_execute*`) | uprobe + uretprobe | `*DSQL_execute_immediate*` | 2 |
+| `Jrd::DsqlDmlRequest::openCursor` | **Cursor-based SELECT execute path** — the Firebird 5 OO API routes multi-row SELECTs through this, not through `DSQL_execute` | uprobe + uretprobe | `*DsqlDmlRequest*openCursor*` | 2 |
+| `Jrd::DsqlCursor::fetchNext` | Per-row fetch; return value `1` signals EOF and triggers cursor-event emission | uprobe + uretprobe | `*DsqlCursor*fetchNext*` | 2 |
+
+Total: 10 probe attachments. Well under bpftrace's 1024-program default. All `.cold` clones must be filtered at attach time (suffix `.cold` on the mangled symbol).
+
+**Justification:** all five entry points are wrapped by Firebird's own Trace API helpers (`TraceDSQLPrepare`, `TraceDSQLExecute`, `TraceDSQLFetch` in `src/jrd/trace/TraceDSQLHelpers.h`), making them stable boundaries across Firebird point releases. Their `event_dsql_prepare` / `event_dsql_execute` calls are the canonical event lifecycle.
+
+**Event lifecycle:**
+
+- **DML / singleton SELECT / SET TRANSACTION / execute-immediate** — one event per `DSQL_execute` or `DSQL_execute_immediate` call. `execute_ns` is the wall-clock of that call.
+- **Cursor-based SELECT** — one event when `DsqlCursor::fetchNext` returns `1` (EOF). `execute_ns` is total wall-clock from `DsqlDmlRequest::openCursor` entry to that EOF fetch return (matches Firebird's Trace API `req_fetch_elapsed` semantics — total time spent producing the result set). Cursors closed before EOF are lost for v0.1; `DSQL_free_statement` probe would close that gap and is deferred to FUTURE.md.
 
 **Capture:**
-- Entry timestamp + arguments (attachment pointer, SQL text pointer, length)
-- Exit timestamp
-- Compute duration; emit event
+- Entry timestamp + arguments (attachment pointer, SQL text pointer, length) at `DSQL_prepare` and `DSQL_execute_immediate`.
+- `DsqlRequest*` return value at `DSQL_prepare` exit — correlation key joining prepare → execute / openCursor → fetch.
+- Exit timestamps at all retprobes; durations computed in BPF; events emitted via ring buffer.
 
 **Output (default):**
 ```
@@ -101,7 +115,7 @@ These two are chosen because together they demonstrate the project's full value 
 - `--json` — JSON Lines output
 - `--firebird-prefix <path>` — override default `/opt/firebird-v5`
 
-**Success criterion:** running `tests/workloads/slowquery-basic.sql` produces an event line per statement, with durations matching `isql -t` wall-clock within 10%.
+**Success criterion:** running `tests/workloads/slowquery-basic.sql` produces an event line per statement (covering both the `DSQL_execute` path via a DML/EXECUTE PROCEDURE statement and the `openCursor`+`fetchNext` path via a multi-row SELECT), with durations matching `isql` `SET STATS ON` wall-clock within 10%.
 
 ### 5.2 `tragach-iowait`
 
