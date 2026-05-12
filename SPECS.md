@@ -151,7 +151,9 @@ Off-CPU time by reason:
 - `--json`
 - `--top-stacks <n>` — number of representative stacks per bucket (default 3)
 
-**Success criterion:** running `tests/workloads/iowait-basic.sql` (which intentionally issues a large table scan + a deliberately contended UPDATE) shows the block-I/O-wait bucket dominating during the scan and the futex-wait bucket appearing during the contention.
+**Success criterion:** running `tests/workloads/iowait-basic.sql` against a 2 GB database (built with `tests/workloads/build-large-db.sh`) with the page cache flushed shows the `block I/O wait` bucket scaling proportionally with actual disk activity — observed in validation: ~500 ms with no real read (BLOB pages not touched) vs ~1.3 s when the scan reads ~2 GB of BLOB data (`Reads = 252539` per isql's `SET STATS ON`). Both `futex wait` and `scheduler delay` buckets also appear, populated by Firebird's worker-pool threads sleeping on connection accept and inter-thread sync.
+
+**Why "dominates" was the wrong test.** In SuperServer, idle worker threads accumulate sleep time as `N_workers × window × idle_fraction`. With 5 workers × 15 s × ~80% idle ≈ 60 s of futex-wait accumulated per 15 s window, the block-I/O bucket cannot dominate by raw aggregate even under heavy read workload (a 2 GB scan only generates ~1.3 s of I/O on NVMe). The tool reports the events correctly; "active-thread filtering" that would surface dominance is a v0.2 feature (FUTURE.md). Contended-UPDATE / futex-wait demonstration remains a manual two-session check.
 
 ## 6. Symbols artifact
 

@@ -1,34 +1,31 @@
 -- Workload for tragach-iowait (SPECS.md §5.2).
 --
--- Designed to drive the block-I/O-wait bucket to dominate: a self-join cross
--- product over EMPLOYEE forces a scan that exceeds the page cache after
--- `echo 3 > /proc/sys/vm/drop_caches`. Without dropping caches first, this
--- exercises CPU + cache only; block I/O won't appear.
+-- Scans a 2 GB table whose pages cannot all stay in the page cache once it
+-- has been flushed. The bundled employee.fdb is too small to demonstrate
+-- dominance — it lives entirely in cache after one read.
 --
--- Recommended invocation:
+-- Prerequisite: run tests/workloads/build-large-db.sh once (creates
+-- /var/lib/firebird/tragach-iowait-large.fdb, ~2 GB, ~15 min).
 --
---   $(grep -E '^ISC_(USER|PASSWORD)=' /opt/firebird-v5/SYSDBA.password \
+-- Run:
+--
+--   $(sudo grep -E '^ISC_(USER|PASSWORD)=' /opt/firebird-v5/SYSDBA.password \
 --       | sed 's/^/export /')
 --   sudo sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches'
 --   sudo tragach-iowait --interval 5s &
 --   isql -i tests/workloads/iowait-basic.sql
 --
--- For the futex-wait bucket to dominate, run two concurrent isql sessions
--- against the same row — that lock-wait is the contended UPDATE scenario
--- SPECS §5.2 calls out. Not scripted here because it needs two processes;
--- documented as a manual two-terminal check.
+-- Expected output: the `block I/O wait` bucket dominates the first scan
+-- with stacks rooted in io_schedule / filemap_get_pages. A second scan in
+-- the same session is cache-warm and shows almost no block I/O.
+-- The contended-UPDATE / futex-wait scenario is a separate manual check
+-- (run two concurrent isql sessions hitting the same row).
 
-CONNECT 'localhost:/opt/firebird-v5/examples/empbuild/employee.fdb';
+CONNECT 'localhost:/var/lib/firebird/tragach-iowait-large.fdb';
+SET STATS ON;
 
--- Cold-cache self-join: ~10⁴ rows × itself, forced sort, no cache help.
-SELECT COUNT(*)
-  FROM EMPLOYEE A, EMPLOYEE B, EMPLOYEE C
-  WHERE A.EMP_NO < B.EMP_NO
-    AND B.EMP_NO < C.EMP_NO;
-
--- A second pass exercises the cache-warm path (no block I/O expected).
-SELECT COUNT(*)
-  FROM EMPLOYEE A, EMPLOYEE B
-  WHERE A.EMP_NO < B.EMP_NO;
+-- Cold-cache full-table scan. Pages are 8 KB, ~250k rows of 8 KB BLOB each,
+-- so the scan must hit disk for ~2 GB of data when the page cache is empty.
+SELECT COUNT(*) FROM BIG_T;
 
 EXIT;

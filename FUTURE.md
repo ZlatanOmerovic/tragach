@@ -29,6 +29,12 @@ This is the killer demo: correlating engine-level page operations with kernel-le
 - Correlation across engine event and kernel block event uses (PID, request ID) tuple — verify request ID is available at both ends.
 - Output format: per-query I/O attribution, or aggregated histogram? Probably both with a flag.
 
+## v0.2 — iowait active-thread filtering
+
+The original SPECS §5.2 success criterion ("block I/O dominates during scans") proved unachievable on SuperServer: idle worker threads sleeping in `futex_wait` and the connection-accept thread sleeping in `poll()` accumulate `N_threads × window × idle_fraction` of off-CPU time regardless of workload, so the absolute aggregate is always futex-dominated even when actual disk activity is heavy. tragach-iowait correctly tracks proportional response (block I/O grew 2.7× under a 2 GB cold scan in validation), but the "dominance" view requires distinguishing "thread sleeping waiting for work" from "thread sleeping waiting for I/O or a lock."
+
+**Plan:** add a v0.2 flag (`--active-threads` or `--exclude-idle`) that suppresses any (pid, stack_id) bucket whose accumulated off-CPU time exceeds some fraction of the window (suggesting the thread spent the whole window in that one wait — a near-certain idle marker). Alternatively / additionally, emit per-thread bucket breakdowns so the scan thread's profile is visible independently of the worker pool's idle profile. Document the heuristic alongside the flag.
+
 ## v0.2+ — quality-of-life
 
 - **Single `tragach` binary with subcommands.** `tragach slowquery`, `tragach iowait`, etc. Shared CLI parsing, shared output formatting, shared `--firebird-prefix` resolution. Worth doing once there are ≥3 scripts.
