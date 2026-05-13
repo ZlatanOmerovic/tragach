@@ -11,7 +11,23 @@ Two CLI tools that observe a running Firebird v5 SuperServer:
 - **`tragach-slowquery`** — engine-level DSQL statement tracing. Per-attachment prepare + execute timing with the SQL text, captured via uprobes on `libEngine13.so`. Covers cursor-based SELECTs (openCursor + fetchNext lifecycle) as well as the non-cursor DSQL_execute path.
 - **`tragach-iowait`** — kernel-level off-CPU profiling of Firebird threads via `sched:sched_switch` / `sched:sched_wakeup`. Bucketed by reason (block I/O / futex / scheduler delay / other) with representative kernel stacks.
 
-See [SPECS.md](SPECS.md) for the v0.1 work order. [FUTURE.md](FUTURE.md) tracks what is deliberately deferred.
+See [SPECS.md](SPECS.md) for the 1.0.0-beta work order. [FUTURE.md](FUTURE.md) tracks what is deliberately deferred.
+
+## Contents
+
+- [Status](#status)
+- [Requirements](#requirements)
+- [Build](#build)
+- [Install](#install)
+- [Usage](#usage)
+  - [`tragach-slowquery`](#tragach-slowquery)
+  - [`tragach-iowait`](#tragach-iowait)
+- [Why not just `SET STATS ON` in `isql`?](#why-not-just-set-stats-on-in-isql)
+- [Overhead](#overhead)
+- [On the debug-symbol dependency (and how USDT would obsolete it)](#on-the-debug-symbol-dependency-and-how-usdt-would-obsolete-it)
+- [Known limitations](#known-limitations)
+- [Related](#related)
+- [License](#license)
 
 ## Status
 
