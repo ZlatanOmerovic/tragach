@@ -158,6 +158,10 @@ Methodology and per-probe breakdowns are in each script's source-file header (`c
 - `tragach-iowait` filters to a single PID. Firebird SuperServer is one process; Classic / SuperClassic (multiple worker processes) are deferred to FUTURE.md.
 - Symbol resolution relies on Firebird's `.debug` files (gnu_debuglink target). A `firebird-dbgsym` package or an unstripped build is required.
 
+## Related
+
+- **[tragach-forge](https://github.com/ZlatanOmerovic/tragach-forge)** — adversarial Firebird workload generator. Peer project. Produces reproducible-but-pathological engine workloads (cold scans, contended UPDATEs, bulk imports, recursive queries, …) with seeded determinism and an NDJSON ground-truth recording of every operation it intended. Pair forge with tragach to validate that tragach observes the workloads forge generates — forge ships a `correlate.py` script that joins its recordings against tragach's `--json` output. Forge runs standalone too, as a general Firebird stress harness.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
