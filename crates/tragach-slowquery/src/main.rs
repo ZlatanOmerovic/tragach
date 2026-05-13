@@ -29,10 +29,18 @@ struct Args {
     json: bool,
 
     /// Firebird install root. Probes attach against
-    /// `<prefix>/plugins/libEngine13.so` with offsets resolved from
-    /// `<prefix>/plugins/.debug/libEngine13.so.debug`.
+    /// `<prefix>/plugins/libEngine13.so` with offsets resolved (by default)
+    /// from `<prefix>/plugins/.debug/libEngine13.so.debug`.
     #[arg(long, default_value = "/opt/firebird-v5")]
     firebird_prefix: PathBuf,
+
+    /// Override the debug-symbols file path. If unset, defaults to
+    /// `<firebird-prefix>/plugins/.debug/libEngine13.so.debug` (the
+    /// gnu_debuglink target in a stock Firebird install). Use this when
+    /// the debug file lives elsewhere — e.g. a distro `firebird-dbgsym`
+    /// package that installs under `/usr/lib/debug/...`.
+    #[arg(long)]
+    debug_path: Option<PathBuf>,
 }
 
 static BPF_OBJECT: &[u8] = include_bytes_aligned!(concat!(env!("OUT_DIR"), "/tragach-slowquery"));
@@ -43,9 +51,9 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let libengine = args.firebird_prefix.join("plugins/libEngine13.so");
-    let debug_path = args
-        .firebird_prefix
-        .join("plugins/.debug/libEngine13.so.debug");
+    let debug_path = args.debug_path.clone().unwrap_or_else(|| {
+        args.firebird_prefix.join("plugins/.debug/libEngine13.so.debug")
+    });
     ensure_paths(&libengine, &debug_path)?;
 
     let offsets = symbols::resolve(&debug_path)
@@ -116,8 +124,10 @@ fn ensure_paths(libengine: &Path, debug: &Path) -> Result<()> {
     }
     if !debug.exists() {
         bail!(
-            "debug symbols not found at {} — gnu_debuglink target missing; \
-             install firebird debug package or unstripped build",
+            "debug symbols not found at {} — gnu_debuglink target missing. \
+             Pass --debug-path <path> to point at a relocated debug file, or \
+             install a firebird debug package / unstripped build under the \
+             prefix.",
             debug.display()
         );
     }

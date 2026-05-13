@@ -20,7 +20,7 @@ See [SPECS.md](SPECS.md) for the v0.1 work order. [FUTURE.md](FUTURE.md) tracks 
 ## Requirements
 
 - Linux kernel ≥ 6.1 with BTF (`/sys/kernel/btf/vmlinux`)
-- Firebird v5 SuperServer at `/opt/firebird-v5` (override with `--firebird-prefix`); for slowquery the install must include debug symbols (`<prefix>/plugins/.debug/libEngine13.so.debug`)
+- Firebird v5 SuperServer at `/opt/firebird-v5` (override with `--firebird-prefix`). For slowquery, the install must include debug symbols at `<firebird-prefix>/plugins/.debug/libEngine13.so.debug` — point `--debug-path` somewhere else if your distro installs them apart from the engine (e.g. a `firebird-dbgsym` package that lands them under `/usr/lib/debug/`).
 - CAP_BPF + CAP_PERFMON (or root) to attach the BPF programs
 
 ## Build
@@ -68,7 +68,10 @@ sudo setcap cap_bpf,cap_perfmon=eip /usr/local/bin/tragach-iowait
 ### `tragach-slowquery`
 
 ```bash
-sudo tragach-slowquery [--threshold 100ms] [--json] [--firebird-prefix /opt/firebird-v5]
+sudo tragach-slowquery \
+    [--threshold 100ms] [--json] \
+    [--firebird-prefix /opt/firebird-v5] \
+    [--debug-path /usr/lib/debug/.../libEngine13.so.debug]
 ```
 
 Example output (human-readable) — running the workload in `tests/workloads/slowquery-basic.sql`:
