@@ -1,0 +1,95 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs of the same ref when a new push lands.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu-22.04
+            runner: ubuntu-22.04
+            container: ""
+          - label: ubuntu-24.04
+            runner: ubuntu-24.04
+            container: ""
+          - label: debian-12
+            runner: ubuntu-latest
+            container: debian:bookworm-slim
+          - label: debian-13
+            runner: ubuntu-latest
+            container: debian:trixie-slim
+
+    steps:
+      # Inside Debian containers we lack sudo, ca-certs, git, gcc, etc. Install
+      # them first. On native Ubuntu runners the harness is already set up.
+      - name: apt setup (containers only)
+        if: matrix.container != ''
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates git build-essential pkg-config \
+            libelf-dev zlib1g-dev clang llvm
+
+      - name: apt setup (native runners)
+        if: matrix.container == ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libelf-dev zlib1g-dev clang llvm
+
+      - uses: actions/checkout@v4
+
+      # Install both toolchains explicitly; do NOT rely on rust-toolchain.toml
+      # in CI because aya-build's nested cargo invocation needs nightly + rust-src.
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install nightly Rust + rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tragach-${{ matrix.label }}
+          # The BPF subcrate's target dir lives under each userspace crate's
+          # OUT_DIR (build.rs writes there); the default rust-cache patterns
+          # already cover the workspace target/ which is enough.
+
+      - name: Install bpf-linker
+        run: |
+          if ! command -v bpf-linker >/dev/null; then
+            cargo install bpf-linker --locked --version 0.10.3
+          fi
+
+      - name: Build tragach-slowquery (release)
+        run: cargo build --release -p tragach-slowquery
+
+      - name: Build tragach-iowait (release)
+        run: cargo build --release -p tragach-iowait
+
+      - name: Inspect built BPF objects
+        run: |
+          for obj in $(find target -name 'tragach-slowquery' -o -name 'tragach-iowait' | grep -E 'bpfel-unknown-none/release'); do
+            echo "=== $obj ==="
+            file "$obj"
+          done

@@ -1,6 +1,6 @@
-# SPECS.md — tragach v0.1
+# SPECS.md — tragach 1.0.0-beta
 
-The work order for tragach v0.1. CLAUDE.md is the operating manual; this file is the spec. FUTURE.md is everything v0.1 explicitly defers.
+The work order for tragach 1.0.0-beta. CLAUDE.md is the operating manual; this file is the spec. FUTURE.md is everything 1.0.0-beta explicitly defers.
 
 ## 1. Project identity
 
@@ -9,7 +9,7 @@ The work order for tragach v0.1. CLAUDE.md is the operating manual; this file is
 - **License:** Apache-2.0
 - **Relationship to other projects:** tragach is independent. It is not part of, namespaced under, or branded with Plamenix or any Firebird Foundation project. No cross-references unless the human explicitly approves.
 
-## 2. v0.1 scope
+## 2. 1.0.0-beta scope
 
 Two CLI binaries:
 
@@ -30,7 +30,7 @@ These two are chosen because together they demonstrate the project's full value 
 
 ### Target Firebird
 - Version: the v5.0.x tag built and installed in the bootstrap. Pin the exact tag in `Cargo.toml` metadata and in `symbols/`.
-- Architecture: SuperServer only. Classic and SuperClassic are out of scope for v0.1.
+- Architecture: SuperServer only. Classic and SuperClassic are out of scope for 1.0.0-beta.
 - Binary layout: server is `/opt/firebird-v5/bin/firebird`; engine logic is in `/opt/firebird-v5/plugins/libEngine13.so`. Both have separate `.debug` files via gnu_debuglink.
 - Build flags (already done in bootstrap): `-O2 -g`. No re-builds required.
 
@@ -93,7 +93,7 @@ Total: 10 probe attachments. Well under bpftrace's 1024-program default. All `.c
 **Event lifecycle:**
 
 - **DML / singleton SELECT / SET TRANSACTION / execute-immediate** — one event per `DSQL_execute` or `DSQL_execute_immediate` call. `execute_ns` is the wall-clock of that call.
-- **Cursor-based SELECT** — one event when `DsqlCursor::fetchNext` returns `1` (EOF). `execute_ns` is total wall-clock from `DsqlDmlRequest::openCursor` entry to that EOF fetch return (matches Firebird's Trace API `req_fetch_elapsed` semantics — total time spent producing the result set). Cursors closed before EOF are lost for v0.1; `DSQL_free_statement` probe would close that gap and is deferred to FUTURE.md.
+- **Cursor-based SELECT** — one event when `DsqlCursor::fetchNext` returns `1` (EOF). `execute_ns` is total wall-clock from `DsqlDmlRequest::openCursor` entry to that EOF fetch return (matches Firebird's Trace API `req_fetch_elapsed` semantics — total time spent producing the result set). Cursors closed before EOF are lost for 1.0.0-beta; `DSQL_free_statement` probe would close that gap and is deferred to FUTURE.md.
 
 **Capture:**
 - Entry timestamp + arguments (attachment pointer, SQL text pointer, length) at `DSQL_prepare` and `DSQL_execute_immediate`.
@@ -110,7 +110,7 @@ Total: 10 probe attachments. Well under bpftrace's 1024-program default. All `.c
 {"ts":"2026-05-12T14:23:01Z","att":42,"prepare_us":2100,"execute_us":124000,"sql":"SELECT * FROM orders WHERE ..."}
 ```
 
-**Flags (v0.1):**
+**Flags (1.0.0-beta):**
 - `--threshold <duration>` — only emit if execute exceeds threshold (e.g. `--threshold 100ms`)
 - `--json` — JSON Lines output
 - `--firebird-prefix <path>` — override default `/opt/firebird-v5`
@@ -145,7 +145,7 @@ Off-CPU time by reason:
 
 **Output (`--json`):** one JSON object per flush window with per-bucket totals and representative stacks.
 
-**Flags (v0.1):**
+**Flags (1.0.0-beta):**
 - `--pid <pid>` — override Firebird PID detection
 - `--interval <duration>` — flush interval (default 10s)
 - `--json`
@@ -167,9 +167,9 @@ For each Firebird version tracked:
 
 The file is ground truth for probe selection. If a probe target is in the source but not in this file, it does not exist in the binary and cannot be used.
 
-## 7. Non-goals (v0.1)
+## 7. Non-goals (1.0.0-beta)
 
-Each of these is real future work, but explicitly out of v0.1:
+Each of these is real future work, but explicitly out of 1.0.0-beta:
 - Classic or SuperClassic architecture
 - Firebird v3, v4, or v6 (v6 not yet stable; v3/v4 are v0.x+ work)
 - Daemon mode, long-running background process
@@ -184,7 +184,7 @@ Each of these is real future work, but explicitly out of v0.1:
 - Plan visibility, query plan analysis
 - SQL parsing or query-pattern fingerprinting
 
-## 8. Success criteria for v0.1 as a whole
+## 8. Success criteria for 1.0.0-beta as a whole
 
 - Both binaries compile clean on the pinned Aya version
 - Both binaries pass their per-script success criteria (§5.1, §5.2)

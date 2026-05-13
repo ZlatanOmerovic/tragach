@@ -1,5 +1,9 @@
 # tragach
 
+[![build](https://github.com/ZlatanOmerovic/tragach/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ZlatanOmerovic/tragach/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/ZlatanOmerovic/tragach?include_prereleases&sort=semver)](https://github.com/ZlatanOmerovic/tragach/releases)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 > *eBPF observability for Firebird — see why your queries are slow, not just that they are.*
 
 Two CLI tools that observe a running Firebird v5 SuperServer:
@@ -11,7 +15,7 @@ See [SPECS.md](SPECS.md) for the v0.1 work order. [FUTURE.md](FUTURE.md) tracks 
 
 ## Status
 
-v0.1 functionally complete — both probes implemented, validated against live Firebird, overhead measured.
+**Version:** `1.0.0-beta` — first public pre-release, [SemVer 2.0.0](https://semver.org/spec/v2.0.0.html). Both probes implemented, validated against live Firebird, overhead measured. CI builds against Ubuntu 22.04 / 24.04 and Debian 12 / 13. Binary tarballs attached to each release.
 
 ## Requirements
 

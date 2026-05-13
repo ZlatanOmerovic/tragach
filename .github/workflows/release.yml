@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required for softprops/action-gh-release
+
+jobs:
+  build-and-release:
+    name: release (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu-22.04
+            runner: ubuntu-22.04
+          - label: ubuntu-24.04
+            runner: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt setup
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libelf-dev zlib1g-dev clang llvm
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install nightly Rust + rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.label }}
+
+      - name: Install bpf-linker
+        run: |
+          if ! command -v bpf-linker >/dev/null; then
+            cargo install bpf-linker --locked --version 0.10.3
+          fi
+
+      - name: Build release binaries
+        run: |
+          cargo build --release -p tragach-slowquery
+          cargo build --release -p tragach-iowait
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          cp target/release/tragach-slowquery dist/
+          cp target/release/tragach-iowait dist/
+          cp README.md LICENSE SPECS.md dist/
+          # Include the symbols artifact for the Firebird tag this build targets.
+          mkdir -p dist/symbols
+          cp symbols/*.txt dist/symbols/
+          tar -C dist -czf tragach-${{ github.ref_name }}-${{ matrix.label }}-x86_64.tar.gz .
+          sha256sum tragach-${{ github.ref_name }}-${{ matrix.label }}-x86_64.tar.gz \
+            > tragach-${{ github.ref_name }}-${{ matrix.label }}-x86_64.tar.gz.sha256
+
+      - name: Attach to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tragach-${{ github.ref_name }}-${{ matrix.label }}-x86_64.tar.gz
+            tragach-${{ github.ref_name }}-${{ matrix.label }}-x86_64.tar.gz.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
