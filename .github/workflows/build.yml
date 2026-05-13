@@ -45,7 +45,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            curl ca-certificates git build-essential pkg-config \
+            curl ca-certificates git file build-essential pkg-config \
             libelf-dev zlib1g-dev clang llvm
 
       - name: apt setup (native runners)
