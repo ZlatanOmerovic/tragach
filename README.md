@@ -145,6 +145,28 @@ Bucket classification is by stack-frame substring: block I/O matches `blk_*` / `
 | `by_reason.<label>.top_stacks[].ms` | integer | Off-CPU milliseconds attributed to this exact stack |
 | `by_reason.<label>.top_stacks[].frames` | array of strings | Kernel frames leaf-first (e.g. `["__schedule","schedule","io_schedule",…]`) |
 
+## Why not just `SET STATS ON` in `isql`?
+
+`isql`'s `SET STATS ON` reports a single "Elapsed time" number per statement — but that number includes the TCP round-trip from `isql` to the Firebird server **and** the time `isql` spends formatting + printing rows back. tragach probes the engine's `DSQL_prepare` / `DSQL_execute` (and the `openCursor` → EOF `fetchNext` cursor lifecycle) directly, so its `prepare_ns` and `execute_ns` are *just* the time spent inside the engine.
+
+Same three queries against the bundled `employee.fdb`, captured back-to-back on the same idle VM (localhost TCP):
+
+| Query | `isql` Elapsed | tragach `prepare` | tragach `execute` | tragach total | client overhead (the gap) |
+|---|---:|---:|---:|---:|---:|
+| `SELECT FIRST_NAME, LAST_NAME FROM EMPLOYEE WHERE EMP_NO=2` | 2000 µs | 853 µs | 46 µs | **899 µs** | ~1100 µs |
+| `SELECT COUNT(*) FROM EMPLOYEE` | 1000 µs | 71 µs | 49 µs | **120 µs** | ~880 µs |
+| `SELECT DEPARTMENT, COUNT(...) FROM DEPARTMENT LEFT JOIN EMPLOYEE GROUP BY DEPARTMENT` | 2000 µs | 421 µs | 216 µs | **637 µs** | ~1363 µs |
+
+For sub-millisecond engine work, isql's number is dominated by client-side overhead — a >50% measurement error if you're trying to diagnose Firebird itself. tragach also separates `prepare_ns` from `execute_ns` (isql lumps them), and observes **every** attachment on the server, not just the one you happen to be typing into.
+
+A few non-obvious benefits beyond accuracy:
+
+- **No client change.** Applications don't need `SET STATS ON`, a Trace API plugin, or a recompile. tragach attaches uprobes from outside the process.
+- **Cross-attachment view.** See what every connection is doing concurrently, not just one isql session.
+- **Stack-level off-CPU attribution** (via `tragach-iowait`) — `SET STATS ON` can't tell you *why* a query was slow (block I/O? futex? scheduler delay?). tragach can.
+
+The tradeoff is the [overhead below](#overhead) — tragach adds ~31 µs per DSQL statement (~10% wall-clock on a 3 300 stmts/s burst). `SET STATS ON` is essentially free. Use tragach when you need engine-level fidelity or the cross-attachment view; `SET STATS ON` is enough when you just want a one-shot end-to-end number from your isql session.
+
 ## Overhead
 
 Measured on Debian 13 trixie (kernel 6.12), Firebird v5.0.4 SuperServer, against the bundled `employee.fdb`. Benchmark: 10 000 singleton SELECT statements via `isql`, mean of 5 runs each.
