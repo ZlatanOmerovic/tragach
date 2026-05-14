@@ -155,9 +155,11 @@ Off-CPU time by reason:
 
 **Flags (1.0.0-beta.2, added by promotion from FUTURE.md):**
 - `--exclude-idle` — when set, suppresses any `(pid, stack_id)` bucket whose accumulated off-CPU time exceeds `--idle-threshold` of the window before reason classification runs. Defaults off (preserves prior output shape).
-- `--idle-threshold <fraction>` — fraction of the window above which a single-thread-single-stack bucket counts as "idle." Default `0.80`. Range `0.0`–`1.0`. Ignored unless `--exclude-idle` is set.
+- `--idle-threshold <fraction>` — fraction of the window above which a single-thread-single-stack bucket counts as "idle." Default `0.50`. Range `0.0`–`1.0`. Ignored unless `--exclude-idle` is set.
 
-**The idle-thread heuristic.** Idle SuperServer worker threads sleep for nearly the entire window in a single stack (`futex_wait_queue` for worker-pool idle, `schedule_hrtimeout_range_clock`→`do_sys_poll` for the connection-accept thread). A genuinely-busy thread doing real I/O switches between CPU work and waits, so no single `(pid, stack_id)` bucket accumulates close to `window × 1.0`. The `--exclude-idle` filter drops buckets above the threshold; the remainder is the workload signal.
+**The idle-thread heuristic.** SuperServer worker threads sleep in `futex_wait_queue` for ~63% of any given window (idle worker pool, 5 threads × ~9.5 s in a 15 s window); the connection-accept thread sleeps in `schedule_hrtimeout_range_clock`→`do_sys_poll` for ~85% of the window. Both are above the 0.50 default and get dropped. A genuinely-busy thread doing real I/O switches between CPU work and brief waits, so no single `(pid, stack_id)` bucket accumulates close to half the window. The `--exclude-idle` filter drops buckets above the threshold; the remainder is the workload signal.
+
+The 0.50 default was calibrated empirically during implementation. An earlier 0.80 caught only the poll thread (85% > 80%) but missed the worker-pool futex buckets (63% < 80%). Lowering to 0.50 catches both classes without misclassifying genuinely-busy threads.
 
 The heuristic doesn't change which events the BPF program emits; it filters at flush time in userspace, on the snapshot of `BUCKETS` taken before classification. JSON output gains an `excluded_idle_buckets` counter alongside `by_reason`.
 
