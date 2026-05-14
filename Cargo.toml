@@ -4,6 +4,7 @@ members = [
     "crates/tragach-common",
     "crates/tragach-slowquery",
     "crates/tragach-iowait",
+    "crates/tragach-attach",
     "xtask",
 ]
 # BPF sub-crates use a different target (bpfel-unknown-none) and nightly
@@ -12,6 +13,7 @@ members = [
 exclude = [
     "crates/tragach-slowquery/src/bpf",
     "crates/tragach-iowait/src/bpf",
+    "crates/tragach-attach/src/bpf",
 ]
 
 [workspace.package]

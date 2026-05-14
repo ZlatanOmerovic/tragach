@@ -41,3 +41,31 @@ pub struct IoWaitSample {
     pub kstack_id: i32,
     pub reason: u32,
 }
+
+/// Attachment lifecycle event kind. Keep in sync with userspace decoder.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachEventKind {
+    Opened = 0,
+    Closed = 1,
+}
+
+/// One attachment-lifecycle event (open or close). See SPECS.md §5.3.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AttachEvent {
+    /// `bpf_ktime_get_ns()` at the moment the event fired.
+    pub ts_ns: u64,
+    /// Lifetime in nanoseconds. `0` for `Opened` events (not yet known).
+    pub duration_ns: u64,
+    /// Raw `Jrd::Attachment*` pointer — stable for the connection's lifetime.
+    pub attachment_ptr: u64,
+    /// Firebird worker PID handling this end of the lifecycle.
+    pub pid: u32,
+    /// Linux TID handling this end of the lifecycle.
+    pub tid: u32,
+    /// `AttachEventKind` discriminant.
+    pub kind: u32,
+    /// Padding to keep the struct 8-byte aligned.
+    pub _pad: u32,
+}
