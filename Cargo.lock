@@ -838,6 +838,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tragach-attach"
+version = "1.0.0-beta"
+dependencies = [
+ "anyhow",
+ "aya",
+ "aya-build",
+ "aya-log",
+ "chrono",
+ "clap",
+ "env_logger",
+ "humantime",
+ "log",
+ "nix",
+ "object",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tragach-common",
+]
+
+[[package]]
 name = "tragach-common"
 version = "1.0.0-beta"
 dependencies = [
