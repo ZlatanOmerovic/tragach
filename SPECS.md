@@ -153,9 +153,17 @@ Off-CPU time by reason:
 - `--json`
 - `--top-stacks <n>` — number of representative stacks per bucket (default 3)
 
+**Flags (1.0.0-beta.2, added by promotion from FUTURE.md):**
+- `--exclude-idle` — when set, suppresses any `(pid, stack_id)` bucket whose accumulated off-CPU time exceeds `--idle-threshold` of the window before reason classification runs. Defaults off (preserves prior output shape).
+- `--idle-threshold <fraction>` — fraction of the window above which a single-thread-single-stack bucket counts as "idle." Default `0.80`. Range `0.0`–`1.0`. Ignored unless `--exclude-idle` is set.
+
+**The idle-thread heuristic.** Idle SuperServer worker threads sleep for nearly the entire window in a single stack (`futex_wait_queue` for worker-pool idle, `schedule_hrtimeout_range_clock`→`do_sys_poll` for the connection-accept thread). A genuinely-busy thread doing real I/O switches between CPU work and waits, so no single `(pid, stack_id)` bucket accumulates close to `window × 1.0`. The `--exclude-idle` filter drops buckets above the threshold; the remainder is the workload signal.
+
+The heuristic doesn't change which events the BPF program emits; it filters at flush time in userspace, on the snapshot of `BUCKETS` taken before classification. JSON output gains an `excluded_idle_buckets` counter alongside `by_reason`.
+
 **Success criterion:** running `tests/workloads/iowait-basic.sql` against a 2 GB database (built with `tests/workloads/build-large-db.sh`) with the page cache flushed shows the `block I/O wait` bucket scaling proportionally with actual disk activity — observed in validation: ~500 ms with no real read (BLOB pages not touched) vs ~1.3 s when the scan reads ~2 GB of BLOB data (`Reads = 252539` per isql's `SET STATS ON`). Both `futex wait` and `scheduler delay` buckets also appear, populated by Firebird's worker-pool threads sleeping on connection accept and inter-thread sync.
 
-**Why "dominates" was the wrong test.** In SuperServer, idle worker threads accumulate sleep time as `N_workers × window × idle_fraction`. With 5 workers × 15 s × ~80% idle ≈ 60 s of futex-wait accumulated per 15 s window, the block-I/O bucket cannot dominate by raw aggregate even under heavy read workload (a 2 GB scan only generates ~1.3 s of I/O on NVMe). The tool reports the events correctly; "active-thread filtering" that would surface dominance is a v0.2 feature (FUTURE.md). Contended-UPDATE / futex-wait demonstration remains a manual two-session check.
+**Why "dominates" was the wrong test (without filtering).** In SuperServer, idle worker threads accumulate sleep time as `N_workers × window × idle_fraction`. With 5 workers × 15 s × ~80% idle ≈ 60 s of futex-wait accumulated per 15 s window, the block-I/O bucket cannot dominate by raw aggregate even under heavy read workload (a 2 GB scan only generates ~1.3 s of I/O on NVMe). The `--exclude-idle` flag added in v1.0.0-beta.2 (above) addresses this by dropping idle-worker buckets before classification. With it on, the block-I/O bucket *can* dominate as SPECS originally intended, on the same workload — see the worked example in the README.
 
 ### 5.3 `tragach-attach`
 
