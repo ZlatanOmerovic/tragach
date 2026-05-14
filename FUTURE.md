@@ -6,18 +6,7 @@ The purpose of this file is twofold: (1) prevent scope creep in v0.1 by giving e
 
 ## v0.2 — additional scripts
 
-The other two scripts originally planned alongside `tragach-slowquery` and `tragach-iowait`:
-
-### `tragach-attach`
-**Question:** *Connection lifecycle — who connects, from where, how long is each attachment, what does it do?*
-
-**Hook points (planned):**
-- Probe patterns against `libEngine13.so`: attachment construction and destruction. Candidate substrings include `*Attachment*C1*` (constructor) and `*Attachment*D1*` (destructor), but `*Attachment*` alone matched 571 probes during bootstrap verification and exceeds bpftrace's 1024-program default — narrowing is required. Read `symbols/` and pick a tight pattern at v0.2 design time.
-- Optional: kernel-side `tcp_v4_connect` / `inet_csk_accept` correlation for connection source IP and port.
-
-**Open design questions:**
-- How to key events to a specific attachment ID across the connection's lifetime when the attachment struct's layout isn't part of a stable ABI — likely via the attachment pointer captured at construction time.
-- Whether to capture authentication events or stay at connection-lifecycle level only.
+`tragach-attach` was promoted from this section to SPECS.md §5.3 in v1.0.0-beta.2. `tragach-pageio` remains here.
 
 ### `tragach-pageio`
 **Question:** *When Firebird reads or writes a database page, what's the underlying block-device latency, and which queries triggered the I/O?*
