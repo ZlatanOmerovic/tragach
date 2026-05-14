@@ -6,17 +6,12 @@ The purpose of this file is twofold: (1) prevent scope creep in v0.1 by giving e
 
 ## v0.2 — additional scripts
 
-`tragach-attach` was promoted from this section to SPECS.md §5.3 in v1.0.0-beta.2. `tragach-pageio` remains here.
+Both originally planned v0.2 scripts have been promoted:
 
-### `tragach-pageio`
-**Question:** *When Firebird reads or writes a database page, what's the underlying block-device latency, and which queries triggered the I/O?*
+- `tragach-attach` → SPECS.md §5.3 in v1.0.0-beta.2.
+- `tragach-pageio` → SPECS.md §5.4 in v1.0.0-beta.2.
 
-This is the killer demo: correlating engine-level page operations with kernel-level block-device events. Source-side probe is at the buffer-manager / cache-manager layer in Firebird (`src/jrd/cch.cpp` and adjacent). Kernel side is `block_rq_issue` / `block_rq_complete` tracepoints.
-
-**Open design questions:**
-- Engine probe target needs careful selection. `CCH_*` functions in v5 are mangled C++ — read `symbols/` at design time.
-- Correlation across engine event and kernel block event uses (PID, request ID) tuple — verify request ID is available at both ends.
-- Output format: per-query I/O attribution, or aggregated histogram? Probably both with a flag.
+Per-query I/O attribution (joining `tragach-pageio` events back to the originating `tragach-slowquery` statement) was discussed in the original FUTURE entry; it is deferred to v0.3 — would require an in-process join across two NDJSON streams or a shared correlation key in the kernel, both larger than the current PoC scope.
 
 ## v0.2 — iowait active-thread filtering
 

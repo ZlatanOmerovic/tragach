@@ -11,13 +11,14 @@ The work order for tragach 1.0.0-beta. CLAUDE.md is the operating manual; this f
 
 ## 2. 1.0.0-beta scope
 
-Three CLI binaries:
+Four CLI binaries:
 
 1. **`tragach-slowquery`** — engine-level statement tracing. Captures DSQL statement prepare + execute timing per attachment, with the SQL text.
 2. **`tragach-iowait`** — kernel-level off-CPU profiling of the Firebird process. Shows where Firebird threads spend time blocked (block I/O, futex, scheduler delay) and for how long.
 3. **`tragach-attach`** — connection-lifecycle tracing. Per-attachment open and close timestamps and duration, capturing the inner `Jrd::Attachment*` at construction time and joining against `release_attachment`. Added in `v1.0.0-beta.2` (promoted from FUTURE.md).
+4. **`tragach-pageio`** — page-I/O correlation. Joins engine-level `CCH_fetch_page` cache-miss events with kernel `block_rq_issue` / `block_rq_complete` tracepoints to surface "engine asked for a page, the block device took X ms to deliver it." Added in `v1.0.0-beta.2` (promoted from FUTURE.md).
 
-These three are chosen because together they demonstrate the project's full value proposition: engine probing (slowquery), kernel correlation (iowait), and the lifecycle scope they both operate within (attach). The other planned scripts are in FUTURE.md.
+These four together demonstrate the project's full value proposition: engine probing (slowquery), kernel off-CPU correlation (iowait), connection lifecycle (attach), and engine↔block-device latency correlation (pageio). Additional planned scripts are in FUTURE.md.
 
 ## 3. Target configuration
 
@@ -216,6 +217,78 @@ Total: 2 probe attachments. Well under bpftrace's 1024-program default. `.cold` 
 - `--min-duration <duration>` — only emit `"closed"` events for attachments that lived at least this long. Useful for filtering pool-keepalive churn.
 
 **Success criterion:** running a workload that opens N attachments and closes them all produces exactly N `"opened"` events followed by N `"closed"` events with positive `duration_us`. Validated against `forge run steady-oltp` (creates a known number of attachments per scenario) and a simple `isql` connect-disconnect script.
+
+### 5.4 `tragach-pageio`
+
+**Question answered:** *When Firebird reads a page that wasn't in its cache, what's the underlying block-device latency, and how much engine time is spent waiting on it?*
+
+Added in `v1.0.0-beta.2` (promoted from FUTURE.md in commit hash TBD). PoC scope — read path only (`CCH_fetch_page`), aggregated per flush window. Write path (`CCH_flush`, `CCH_mark`) and per-query attribution are deferred.
+
+**Hook points:**
+
+| Function | Role | Probe | Substring pattern | Expected count |
+|---|---|---|---|---|
+| `CCH_fetch_page(Jrd::thread_db*, Jrd::win*, bool)` (libEngine13.so) | Cache-manager entry that runs **only on a cache miss** — every call is a real disk read about to happen. Entry: tdbb (RDI), `win*` (RSI), read_shadow (RDX). Exit: returns void; duration is the wait the engine perceives | uprobe entry + uretprobe exit | `_Z14CCH_fetch_pagePN3Jrd9thread_dbEPNS_3winEb` | 1 primary (filter `.cold`) |
+| `block:block_rq_issue` (kernel tracepoint) | Block layer accepts a request. `dev` u32@8, `sector` u64@16, `bytes` u32@28, `rwbs` char[8]@34. Filter to Firebird tgid | tracepoint | n/a (tracepoint) | n/a |
+| `block:block_rq_complete` (kernel tracepoint) | Block device signals completion. Same `dev`/`sector` as issue → joinable by `(dev, sector)` tuple | tracepoint | n/a (tracepoint) | n/a |
+
+Total: 1 uprobe + 1 uretprobe + 2 tracepoints = 4 BPF programs. Well under any limit.
+
+**Why `CCH_fetch_page` and not `CCH_fetch`.** `CCH_fetch` is the higher-level wrapper that first calls `CCH_fetch_lock` and *conditionally* `CCH_fetch_page`. Probing `CCH_fetch` would fire on cache hits too and require parsing the lock-state return to filter — too noisy for a PoC. `CCH_fetch_page` is unambiguously "Firebird is going to disk." `src/jrd/cch.cpp:899` is the entry point; comment at `:933` confirms "we will read a page, and if there is an I/O error we will try..."
+
+**Page number capture.** The `Jrd::win` struct lays `PageNumber win_page` at offset 0 (verified via `pahole`). Reading 8 bytes from `*(WIN*)` at the BPF probe entry gives us the full `PageNumber` value (page space ID + page number, packed). No deep struct chasing required.
+
+**Event flow:**
+
+1. uprobe `CCH_fetch_page` entry: capture `start_ts = bpf_ktime_get_ns()`, read 8 bytes from `*WIN` to get `page_num`, store `{start_ts, page_num}` keyed by tid in `FETCH_IN_PROGRESS` HashMap.
+2. tracepoint `block_rq_issue`: filter `bpf_get_current_pid_tgid() >> 32 == TARGET_TGID`. Record `{issue_ts, bytes}` keyed by `(dev, sector)` in `BLOCK_INFLIGHT` HashMap. Increment per-window counters: `block_rq_count`, `block_rq_bytes`.
+3. tracepoint `block_rq_complete`: look up `(dev, sector)` in `BLOCK_INFLIGHT`; compute `wait_ns = now - issue_ts`. Add to per-window counter `block_rq_total_wait_ns`. Remove from `BLOCK_INFLIGHT`.
+4. uretprobe `CCH_fetch_page` exit: compute `duration_ns = now - start_ts`. Increment per-window `cch_fetch_count`, `cch_fetch_total_ns`. Remove tid from `FETCH_IN_PROGRESS`.
+
+**Output (default, every flush interval — defaults to `10s`, same as iowait):**
+
+```
+=== tragach-pageio  10s window  pid=736 ===
+Engine page reads (cache misses):
+  count                : 1240
+  total wait           : 842 ms
+  avg / max per call   : 679 µs / 12.4 ms
+Block-device I/O (filtered to Firebird tgid):
+  requests             : 1187
+  total bytes          : 9.7 MB
+  total wait           : 783 ms
+  avg / max per req    : 659 µs / 11.8 ms
+Ratio                  : engine 842 ms / block 783 ms (engine wait ≈ block wait + cache-coordination overhead)
+```
+
+**Output (`--json`):** one JSON object per flush window:
+
+| Field | Type | Notes |
+|---|---|---|
+| `ts` | string | Window emission time |
+| `window_ms` | integer | Flush interval |
+| `pid` | integer | Target Firebird PID |
+| `engine.count` | integer | `CCH_fetch_page` calls in this window |
+| `engine.total_ns` | integer | Total engine-perceived I/O wait |
+| `engine.avg_ns`, `engine.max_ns` | integer | Distribution stats |
+| `block.count` | integer | `block_rq_issue` events filtered to target tgid |
+| `block.total_bytes` | integer | Total bytes from `block_rq_issue.bytes` |
+| `block.total_wait_ns` | integer | Sum of (`complete.ts` − `issue.ts`) for joined pairs |
+| `block.avg_ns`, `block.max_ns` | integer | Distribution stats |
+
+**Flags (v1.0.0-beta.2):**
+- `--pid <pid>` — override Firebird PID detection.
+- `--interval <duration>` — flush interval (default `10s`).
+- `--firebird-prefix <path>` — same convention as the other binaries.
+- `--debug-path <path>` — same convention as the other binaries.
+- `--json` — JSON Lines output.
+
+**Success criterion:** running `forge run cold-scan` (or any sufficiently-large unindexed-scan workload) after `echo 3 > /proc/sys/vm/drop_caches` produces a window where `engine.count > 0` AND `block.count > 0` AND `block.total_wait_ns` is within 50% of `engine.total_ns` for that same window. The intuition: engine wait should be dominated by actual block wait, with cache-coordination + small overhead accounting for the gap.
+
+**Deferred (FUTURE.md):**
+- Write path: `CCH_flush(thread_db*, USHORT, TraNumber)` at `0x1f1330`. Async flushing decouples engine call from disk write — measurement is meaningful only with extra correlation.
+- Per-query attribution: joining each `tragach-pageio` event back to the originating `tragach-slowquery` statement. Listed as v0.3 in FUTURE.md.
+- Per-page-type breakdown: `WIN.win_page` carries a page-type discriminant; aggregating by type ("data page reads vs index reads vs blob page reads") is a follow-up.
 
 ## 6. Symbols artifact
 
