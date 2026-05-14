@@ -36,6 +36,24 @@ struct Args {
     /// Emit JSON Lines instead of human-readable output.
     #[arg(long)]
     json: bool,
+
+    /// Suppress idle-worker buckets at flush time. SuperServer worker threads
+    /// sleeping in `futex_wait` accumulate `N_workers × window × idle_fraction`
+    /// of off-CPU time regardless of workload — without filtering, futex
+    /// dominates every iowait window. With this flag set, any (pid, stack_id)
+    /// bucket whose total exceeds `--idle-threshold` of the window is dropped
+    /// before reason classification. See SPECS.md §5.2.
+    #[arg(long)]
+    exclude_idle: bool,
+
+    /// Fraction of the window above which a single-thread-single-stack bucket
+    /// counts as "idle." Range 0.0-1.0. Default 0.50 — validated against
+    /// SuperServer worker-pool behavior: workers accumulate ~63% of the window
+    /// in `futex_wait_queue`, the accept thread ~85% in `do_sys_poll`, so 0.50
+    /// catches both. Truly busy threads alternate between work and waits and
+    /// stay well below 50% in any single bucket. Ignored unless --exclude-idle.
+    #[arg(long, default_value_t = 0.50)]
+    idle_threshold: f64,
 }
 
 #[repr(C)]
@@ -115,7 +133,18 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             _ = tick.tick() => {
-                flush_window(&mut buckets, &stacks, &kallsyms, args.interval.into(), pid, args.top_stacks, args.json, &mut out)?;
+                flush_window(
+                    &mut buckets,
+                    &stacks,
+                    &kallsyms,
+                    args.interval.into(),
+                    pid,
+                    args.top_stacks,
+                    args.json,
+                    args.exclude_idle,
+                    args.idle_threshold,
+                    &mut out,
+                )?;
             }
         }
     }
@@ -161,6 +190,9 @@ struct JsonWindow<'a> {
     ts: String,
     window_ms: u64,
     pid: u32,
+    /// Number of (pid, stack_id) buckets dropped by --exclude-idle this window.
+    /// `0` when --exclude-idle is off.
+    excluded_idle_buckets: usize,
     by_reason: StdHashMap<&'a str, JsonReason<'a>>,
 }
 
@@ -185,6 +217,8 @@ fn flush_window<W: std::io::Write>(
     pid: u32,
     top_stacks: u32,
     json: bool,
+    exclude_idle: bool,
+    idle_threshold: f64,
     out: &mut W,
 ) -> Result<()> {
     // Drain BUCKETS atomically-ish: snapshot keys+values, then delete each key.
@@ -195,6 +229,17 @@ fn flush_window<W: std::io::Write>(
     }
     for (k, _) in &snapshot {
         let _ = buckets.remove(k);
+    }
+
+    // Idle-bucket filter — drop (pid, stack_id) entries whose ns exceeds
+    // idle_threshold × window. See SPECS.md §5.2.
+    let mut excluded_idle: usize = 0;
+    if exclude_idle {
+        let window_ns = window.as_nanos() as f64;
+        let threshold_ns = (window_ns * idle_threshold) as u64;
+        let before = snapshot.len();
+        snapshot.retain(|(_, ns)| *ns < threshold_ns);
+        excluded_idle = before - snapshot.len();
     }
 
     let mut by_reason: StdHashMap<Reason, ReasonAgg> = StdHashMap::new();
@@ -238,6 +283,7 @@ fn flush_window<W: std::io::Write>(
             ts: Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             window_ms: window.as_millis() as u64,
             pid,
+            excluded_idle_buckets: excluded_idle,
             by_reason: by_reason_json,
         };
         serde_json::to_writer(&mut *out, &win)?;
@@ -249,6 +295,14 @@ fn flush_window<W: std::io::Write>(
             humantime::format_duration(window),
             pid
         )?;
+        if exclude_idle {
+            writeln!(
+                out,
+                "  --exclude-idle: dropped {} bucket(s) above {:.0}% of window",
+                excluded_idle,
+                idle_threshold * 100.0
+            )?;
+        }
         if by_reason.is_empty() {
             writeln!(out, "  (no off-CPU activity in this window)")?;
         } else {
