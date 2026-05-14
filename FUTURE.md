@@ -15,9 +15,11 @@ Per-query I/O attribution (joining `tragach-pageio` events back to the originati
 
 ## v0.2 — iowait active-thread filtering
 
-The original SPECS §5.2 success criterion ("block I/O dominates during scans") proved unachievable on SuperServer: idle worker threads sleeping in `futex_wait` and the connection-accept thread sleeping in `poll()` accumulate `N_threads × window × idle_fraction` of off-CPU time regardless of workload, so the absolute aggregate is always futex-dominated even when actual disk activity is heavy. tragach-iowait correctly tracks proportional response (block I/O grew 2.7× under a 2 GB cold scan in validation), but the "dominance" view requires distinguishing "thread sleeping waiting for work" from "thread sleeping waiting for I/O or a lock."
+Promoted to SPECS.md §5.2 (the `--exclude-idle` / `--idle-threshold` flags) in v1.0.0-beta.2.
 
-**Plan:** add a v0.2 flag (`--active-threads` or `--exclude-idle`) that suppresses any (pid, stack_id) bucket whose accumulated off-CPU time exceeds some fraction of the window (suggesting the thread spent the whole window in that one wait — a near-certain idle marker). Alternatively / additionally, emit per-thread bucket breakdowns so the scan thread's profile is visible independently of the worker pool's idle profile. Document the heuristic alongside the flag.
+The "alternatively / additionally" idea — per-thread bucket breakdown so the scan thread's profile is visible independently of the worker pool's idle profile — was not included in the v1.0.0-beta.2 promotion. Tracked here as a follow-up:
+
+**Plan:** add a `--per-thread` flag to iowait that emits one summary per Firebird thread, not aggregated across the worker pool. Useful when `--exclude-idle`'s heuristic isn't precise enough (e.g. a thread that's half-idle-half-busy in the same stack). Larger output surface; deferred until real-world usage shows whether `--exclude-idle` alone is sufficient.
 
 ## v0.2+ — slowquery parameter values
 
