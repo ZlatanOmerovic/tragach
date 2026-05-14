@@ -1,0 +1,30 @@
+[package]
+name = "tragach-pageio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Engine-to-block-device page-I/O correlation for Firebird via eBPF."
+
+[[bin]]
+name = "tragach-pageio"
+path = "src/main.rs"
+
+[dependencies]
+tragach-common = { workspace = true, features = ["std"] }
+aya.workspace = true
+aya-log.workspace = true
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+tokio.workspace = true
+env_logger.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+humantime.workspace = true
+nix.workspace = true
+object.workspace = true
+
+[build-dependencies]
+aya-build.workspace = true
+anyhow.workspace = true
