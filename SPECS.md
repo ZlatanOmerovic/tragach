@@ -11,12 +11,13 @@ The work order for tragach 1.0.0-beta. CLAUDE.md is the operating manual; this f
 
 ## 2. 1.0.0-beta scope
 
-Two CLI binaries:
+Three CLI binaries:
 
 1. **`tragach-slowquery`** — engine-level statement tracing. Captures DSQL statement prepare + execute timing per attachment, with the SQL text.
 2. **`tragach-iowait`** — kernel-level off-CPU profiling of the Firebird process. Shows where Firebird threads spend time blocked (block I/O, futex, scheduler delay) and for how long.
+3. **`tragach-attach`** — connection-lifecycle tracing. Per-attachment open and close timestamps and duration, capturing the inner `Jrd::Attachment*` at construction time and joining against `release_attachment`. Added in `v1.0.0-beta.2` (promoted from FUTURE.md).
 
-These two are chosen because together they demonstrate the project's full value proposition: engine probing (slowquery) and kernel correlation (iowait). The other planned scripts are in FUTURE.md.
+These three are chosen because together they demonstrate the project's full value proposition: engine probing (slowquery), kernel correlation (iowait), and the lifecycle scope they both operate within (attach). The other planned scripts are in FUTURE.md.
 
 ## 3. Target configuration
 
@@ -155,6 +156,67 @@ Off-CPU time by reason:
 
 **Why "dominates" was the wrong test.** In SuperServer, idle worker threads accumulate sleep time as `N_workers × window × idle_fraction`. With 5 workers × 15 s × ~80% idle ≈ 60 s of futex-wait accumulated per 15 s window, the block-I/O bucket cannot dominate by raw aggregate even under heavy read workload (a 2 GB scan only generates ~1.3 s of I/O on NVMe). The tool reports the events correctly; "active-thread filtering" that would surface dominance is a v0.2 feature (FUTURE.md). Contended-UPDATE / futex-wait demonstration remains a manual two-session check.
 
+### 5.3 `tragach-attach`
+
+**Question answered:** *Which attachments opened against the server, when, and how long did each stay open?*
+
+Added in `v1.0.0-beta.2` (promoted from FUTURE.md in commit hash TBD). PoC scope — DB alias name, login user, and source IP are deferred (notes below).
+
+**Hook points (all in `libEngine13.so`):**
+
+| Function | Role | Probe pair | Substring pattern | Expected count |
+|---|---|---|---|---|
+| `Jrd::Attachment::Attachment(MemoryPool*, Database*, JProvider*)` | Inner `Attachment` constructor — `this` at entry is the freshly-allocated `Attachment*`, used as the lifecycle correlation key | uprobe entry only | `*Jrd*Attachment*Attachment*MemoryPool*Database*JProvider*` | 1 primary (filter `.cold`) |
+| `release_attachment(Jrd::thread_db*, Jrd::Attachment*, ...)` | The static file-scope teardown function in `jrd.cpp`. Argument 2 (RSI) is the `Attachment*` being released — matches the ctor's `this` | uprobe entry only | `*release_attachment*` | 1 primary (filter `.cold`) |
+
+Total: 2 probe attachments. Well under bpftrace's 1024-program default. `.cold` clones must be filtered at attach time, same discipline as slowquery.
+
+**Probe target choice.** The OO-API surface around attachments goes through `JAttachment` (the public wrapper) and `create_attachment` (a static factory in `jrd.cpp`), but these speak `JAttachment*`, not the inner `Jrd::Attachment*` that `release_attachment` takes. Bridging `JAttachment*` → `Attachment*` would require a two-level `pahole`-derived struct offset chain (`JAttachment.att` is a `StableAttachmentPart*`, which in turn holds the `Attachment*`). Probing the inner ctor directly avoids any struct-offset dependency at the cost of dropping the `alias_name` / `DatabaseOptions` metadata that `create_attachment` carries. That metadata returns as a follow-up.
+
+**Justification.** `Jrd::Attachment::Attachment` is the canonical inner-attachment constructor (the only primary entry in the symbols artifact). `release_attachment` is the single static file-scope teardown function called from every disconnect path (`jrd.cpp:3528`, `:8504`, `:8805`) and from `drop_database`. Symmetry on `Attachment*` makes correlation trivial: no struct offsets, no per-version maintenance burden.
+
+**Event lifecycle:**
+
+- At `Attachment::Attachment` entry: capture `RDI` (= `this` = the new `Attachment*`), record `open_ts = bpf_ktime_get_ns()`. Store keyed by `Attachment*` in an LRU map (1024 entries — see slowquery for precedent).
+- At `release_attachment` entry: capture `RSI` (= `Attachment*` being released). Look up the open record, compute `duration_ns = now - open_ts`. Emit ringbuf event. Remove from map.
+- Attachments evicted from the LRU before release emit no event. Attachments whose `release_attachment` runs before tragach attached are silently dropped (same convention as slowquery's unmatched executes).
+
+**Capture (PoC v1.0.0-beta.2):**
+- `Attachment*` (raw pointer, hex) — stable per-attachment identity for the connection's lifetime.
+- `open_ts_ns`, `close_ts_ns` (monotonic, from `bpf_ktime_get_ns`).
+- `duration_ns` (computed).
+- `pid`, `tid` of the Firebird worker handling each end.
+
+**Capture (deferred, FUTURE.md when promoted):**
+- `alias_name` (the DB path) — requires probing `create_attachment` entry and reading `Firebird::PathName` via a `pahole` offset.
+- Login user / role — requires reading `Attachment`'s auth-related members via `pahole`.
+- Source IP/port — kernel-side `tcp_v4_connect` / `inet_csk_accept` tracepoints, joined by `(pid, peer_addr)`.
+
+**Output (default):**
+```
+2026-05-13T15:01:43.881Z  att_ptr=0x7f8c1d04a000  duration=12.4s   pid=736 tid=740   (closed)
+2026-05-13T15:01:43.882Z  att_ptr=0x7f8c1d04b800  duration=    -   pid=736 tid=741   (opened)
+```
+
+**Output (`--json`):** one JSON object per event. Schema:
+
+| Field | Type | Notes |
+|---|---|---|
+| `ts` | string (RFC 3339 ms, UTC) | Observation time |
+| `event` | string | `"opened"` or `"closed"` |
+| `att_ptr` | string (hex) | Raw `Jrd::Attachment*` |
+| `duration_us` | integer or `null` | Total lifetime in µs; `null` on `"opened"` event |
+| `pid` | integer | Firebird worker process |
+| `tid` | integer | Linux thread handling this end of the lifecycle |
+
+**Flags (v1.0.0-beta.2):**
+- `--firebird-prefix <path>` — override default `/opt/firebird-v5` (same convention as slowquery).
+- `--debug-path <path>` — override the debug-symbols file location (same as slowquery).
+- `--json` — JSON Lines output.
+- `--min-duration <duration>` — only emit `"closed"` events for attachments that lived at least this long. Useful for filtering pool-keepalive churn.
+
+**Success criterion:** running a workload that opens N attachments and closes them all produces exactly N `"opened"` events followed by N `"closed"` events with positive `duration_us`. Validated against `forge run steady-oltp` (creates a known number of attachments per scenario) and a simple `isql` connect-disconnect script.
+
 ## 6. Symbols artifact
 
 For each Firebird version tracked:
@@ -179,7 +241,7 @@ Each of these is real future work, but explicitly out of 1.0.0-beta:
 - Cross-platform (Windows, macOS, FreeBSD)
 - Windows ETW or DTrace alternatives
 - Upstream patch to Firebird adding USDT probes (separate effort, see FUTURE.md)
-- Any of the other planned scripts (see FUTURE.md)
+- Any of the other planned scripts beyond slowquery/iowait/attach (see FUTURE.md)
 - Multi-tenant aggregation across multiple Firebird instances
 - Plan visibility, query plan analysis
 - SQL parsing or query-pattern fingerprinting
